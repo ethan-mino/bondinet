@@ -1,8 +1,8 @@
 import os
 import zipfile
 import shutil
-import pickle
-
+import joblib
+from sklearn.preprocessing import OneHotEncoder 
 from sklearn.preprocessing import LabelEncoder
 
 def unzip_all(source_dir_path_list, dest_dir_path, skip = False) :    # source_dir_path_list 안에 있는 각각의 디렉토리 내 zip 파일을 압축 해제하여 dest_dir_path에 저장
@@ -42,17 +42,18 @@ def center_crop(img, result_height, result_width) : # 이미지를 result_height
 
     return img.crop((left, top, right, bottom));
 
-def label_to_number(label) :
-    return LabelEncoder().fit_transform(label)
+def label_to_number(label, onehot = False) :
+    if not onehot :
+        return LabelEncoder().fit_transform(label)
+    else :
+        return OneHotEncoder().fit_transform(np.array(label).reshape(-1, 1)).toarray()
 
 def save_data(data, pickle_file_path) :
-    with open(pickle_file_path, "wb") as img_data_pickle : 
-        pickle.dump(data, img_data_pickle, protocol=2)    # TODO : protocol=pickle.HIGHEST_PROTOCOL (The advantage of HIGHEST_PROTOCOL is that files get smaller. This makes unpickling sometimes much faster.)
+        joblib.dump(data, pickle_file_path)
 
 def load_data(pickle_file_path) : # pickle file로부터 data load
     try :
-        with open(pickle_file_path, "rb") as img_data_pickle : 
-            data = pickle.load(img_data_pickle)
+        data = joblib.load(pickle_file_path)
         print("data loaded!")
         return data 
     except :    # pickle 파일에서 데이터를 load하는데 실패한 경우

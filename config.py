@@ -1,5 +1,6 @@
 import os
 import tensorflow as tf
+import patch_extractor
 
 class CommonConfig :
     PROJECT_PATH = "C:/Users/rlfalsgh95/source/repos/bondinet"  # 프로젝트의 경로
@@ -15,7 +16,9 @@ class CommonConfig :
     ORIGINAL_PHONE_IMG_DIR_PATH = os.path.join(ORIGINAL_IMG_DIR_PATH, IMG_ROOT_DIR_NAME, SMART_PHONE_IMG_DIR_NAME)  # 원본 스마트폰 이미지의 디렉토리 경로
     ORIGINAL_CAMERA_IMG_DIR_PATH = os.path.join(ORIGINAL_IMG_DIR_PATH, IMG_ROOT_DIR_NAME, CAMERA_IMG_DIR_NAME)  # 원본 DSLR 이미지의 디렉토리 경로
 
-    IMG_DATA_PICKLE_NAME = "img_data.pickle"    # 이미지 데이터와 레이블을 저장할 pickle 파일명
+    PICKLE_EXT = ".pkl"
+    IMG_DATA_PICKLE_NAME = "img_data"    # 이미지 데이터와 레이블을 저장할 pickle 파일명
+    PATCH_PICKLE_NAME = "patch"
 
 class PreprocessingConfig : 
     # load_img_data() 파라미터
@@ -24,8 +27,19 @@ class PreprocessingConfig :
     SAVE = True
 
     CENTER_CROP = False
-    IMG_CROP_WIDTH = 64
-    IMG_CROP_HEIGHT = 64
+    IMG_CROP_WIDTH = None
+    IMG_CROP_HEIGHT = None
+
+    # patch config
+    EXTRACT_PATCH = False
+    PATCH_DIM = (64, 64)  # the dimensions of the patches (rows,cols).
+    PATCH_OFFSET = 0  # the offsets of each axis starting from top left corner (rows,cols).
+    PATCH_STRIDE = 1  # the stride of each axis starting from top left corner (rows,cols).
+    PATCH_RAND = False    # rand patches. Must not be set together with function
+    PATCH_HANDLER = patch_extractor.mid_intensity_high_texture   # patch quality function handler. Must not be set together with rand
+    PATCH_THRESHOLD = 0   # minimum quality threshold
+    N_MAX_PATCH = 32    # maximum number of patches
+    PATCH_SAVE_INTERVAL = 500 # patch를 파일에 저장하는 간격(이미지 기준)
 
 class TrainConfig : 
     CLASS_NUM = 29  # Galaxy Note9가 있기 때문에 Galaxy Note9 SM-N960N 디렉터리는 제거하고, Galaxy A8와 Galaxy A8(2018)은 서로 다른 클래스로 취급

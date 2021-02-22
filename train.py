@@ -1,4 +1,5 @@
 import data_processing
+from patch_extractor import patch_extractor_one_arg
 from config import CommonConfig as cc
 from config import TrainConfig as tc
 from config import PreprocessingConfig as pc
@@ -6,7 +7,6 @@ from config import PreprocessingConfig as pc
 from functools import partial
 import os
 import numpy as np
-import pickle
 import tensorflow as tf
 from tqdm import tqdm
 from PIL import Image
@@ -24,7 +24,7 @@ from PIL import Image
 # TODO : Galaxy Note9 SM-N960N는 제외한 후 실험
 # TODO : Train/Test set 분할 (모델마다 섞은 후 20퍼센트)
 
-# 창의님 네트워크
+# 창희님 네트워크
 # 원본 이미지를 겹치지 않게 256 * 256 패치 추출, 모두 사용
 # 각 패치에 대해 분류, 패치들의 평균 정확도를 사용
 
@@ -48,7 +48,7 @@ def unzip_all_img_file(skip = False) :
     data_processing.unzip_all([cc.ORIGINAL_PHONE_IMG_DIR_PATH, cc.ORIGINAL_CAMERA_IMG_DIR_PATH], dest_dir_path, skip = skip)
 
 
-def load_img_data(img_dir_path_list, pickle_file_path, option) : # 이미지가 저정된 디렉토리 하위에 저장된 이미지 데이터를 모두 불러오는 함수 (pillow의 Image 사용)
+def load_img_data(img_dir_path_list, option) : # 이미지가 저정된 디렉토리 하위에 저장된 이미지 데이터를 모두 불러오는 함수 (pillow의 Image 사용)
     # option
     max_img_per_class = option["max_img_per_class"]
     resume = option["resume"]
@@ -66,9 +66,8 @@ def load_img_data(img_dir_path_list, pickle_file_path, option) : # 이미지가 
     error_file_name_list = []   # array로 변환하는데 실패한 이미지 파일명 목록
     X, y = [], []
 
-    pickle_dir_path = os.path.dirname(pickle_file_path) # pickle 파일이 위치한 디렉토리의 path
-    pickle_path_except_ext, pickle_ext = os.path.splitext(pickle_file_path) # pickle 파일의 확장자와 나머지 path를 분리
-    pickle_file_path = os.path.join(pickle_dir_path, f"{pickle_path_except_ext}_{crop_width}_{crop_height}_{max_img_per_class}{pickle_ext}")  # pickle 파일 path ("pickle 파일명_너비_높이_모델당 이미지 개수.확장자")
+    pickle_dir_path = os.path.join(cc.PROJECT_PATH, f"{crop_width}_{crop_height}_{max_img_per_class}") # pickle 파일이 위치한 디렉토리의 path ("center crop 너비_높이_모델당 이미지 개수")
+    pickle_file_path = os.path.join(pickle_dir_path, f"{cc.IMG_DATA_PICKLE_NAME}{cc.PICKLE_EXT}")  # pickle 파일 path 
 
     total_model_dir_path_list = [os.path.join(img_dir_path, img_path) for img_dir_path in img_dir_path_list for img_path in os.listdir(img_dir_path)]   # img_dir_path_list의 각각의 img_dir_path에 있는 파일 및 디렉토리의 path 목록(즉, 카메라 모델 디렉토리의 path 목록)
 
@@ -82,6 +81,9 @@ def load_img_data(img_dir_path_list, pickle_file_path, option) : # 이미지가 
     
     n_model = len(total_model_dir_path_list)    # 카메라 모델 개수
     
+    if not os.path.exists(pickle_dir_path): # 데이터를 저장할 디렉터리가 없다면 생성
+        os.makedirs(pickle_dir_path)
+
     with tqdm(total = n_model, initial = cur_model_index, desc = "Load Img Data") as model_bar : 
         while cur_model_index < n_model  :
             processed_model_img_cnt = 0;    # 처리된 현재 카메라 모델의 이미지 개수
@@ -106,16 +108,54 @@ def load_img_data(img_dir_path_list, pickle_file_path, option) : # 이미지가 
                 if max_img_per_class != None and processed_model_img_cnt >= max_img_per_class :   # 각 모델에 대해 max_img_per_class개의 이미지만 array로 변환
                     break;
         
-            if save == True : # save 파라미터가 True(default)인 경우 pickle 파일에 저장
+            if save == True and cur_model_index % 10 == 0: # save 파라미터가 True(default)인 경우 pickle 파일에 저장
                 data_processing.save_data({"X" : X, "y" : y, "save_model_index" : cur_model_index, "error_file_name_list" : error_file_name_list}, pickle_file_path)    # array로 변환된 이미지 데이터, 레이블, 저장 완료된 카메라 모델의 index를 pickle 파일에 저장
             
             cur_model_index += 1    # 현재 처리중인 모델의 index 증가
             model_bar.update()  # tqdm update
-
-    print("error_cnt : " + str(len(error_file_name_list)))  # image를 불러와 center crop하고, array로 변환할 때 에러가 발생한 파일의 개수 출력
+    
+    print("load error_cnt : " + str(len(error_file_name_list)))  # image를 불러와 center crop하고, array로 변환할 때 에러가 발생한 파일의 개수 출력
     print(error_file_name_list) # 에러가 발생한 파일명 출력
 
-    return X, y # array로 변환된 이미지 데이터와 레이블 반환
+    if "patch_option" in option :   # patch_option 파라미터가 있는 경우 각 이미지에서 patch를 추출
+        patch_option = option["patch_option"]
+        patch_save_interval = patch_option.pop("save_interval") # patch를 파일에 저장하는 간격(이미지 기준)
+        patch_file_path = os.path.join(pickle_dir_path, f"{cc.PATCH_PICKLE_NAME}_{patch_option.dim}_{patch_option.offset}_{patch_option.stride}_{patch_option.rand}_{patch_option.threshold}_{patch_option.num}{cc.PATCH_EXT}") # patch를 저장하는 pickle 파일의 경로
+        
+        cur_img_index = 0 # 현재 patch를 추출중인 이미지의 index
+        extract_error_cnt = 0   # patch 추출 실패 횟수
+
+        total_patch, patch_label = [], []
+        n_img = len(X) # patch를 추출할 이미지 개수 
+
+        if resume : 
+            patch_data = data_processing.load_data(patch_file_path)  # pickle 파일에서 patch 데이터를 불러옴
+            if patch_data != None :   # patch_file_path에 파일이 존재하는 경우
+                cur_img_index = data["save_img_index"] + 1
+                extract_error_cnt = data["extract_error_cnt"]
+                total_patch =  data["total_patch"]
+                patch_label = data["patch_label"]
+
+        with tqdm(total = n_img, initial = cur_img_index, desc = "Extract patch") as patch_bar : 
+            while cur_img_index < n_img :
+                img = X[cur_img_index]  # patch를 추출할 이미지
+                img_label = y[cur_img_index]    # 이미지의 label
+
+                patch_option["img"] = img
+                patches = patch_extractor_one_arg(patch_option) # 각 이미지의 patch를 추출
+                total_patch.append(patches)  
+                
+                n_patch = len(patches) # 추출된 patch의 개수
+                patch_label.full((1, n_patch), img_label)   # 원본 이미지의 label을 상속
+
+                if save == True and cur_img_index % patch_save_interval == 0:   # save 파라미터가 True인 경우 이미지 patch_save_interval 간격으로 patch를 저장
+                    data_processing.save_data({"total_patch" : total_patch, "patch_label" : patch_label, "extract_error_cnt" : extract_error_cnt, "save_img_index" : cur_img_index}, patch_file_path)    
+                
+                cur_img_index += 1
+                patch_bar.update()
+
+    else : 
+        return X, y # array로 변환된 이미지 데이터와 레이블 반환
 
 
 
@@ -224,24 +264,28 @@ class CNN : # https://minimin2.tistory.com/36
         return self.session.run(self.predicted, feed_dict = {self.X : X_data})
 
 if __name__ == "__main__" : 
-    img_data_pickle_path = os.path.join(cc.PROJECT_PATH, cc.IMG_DATA_PICKLE_NAME) # pickle 파일 path
-    
     img_dir_path_list = [cc.PHONE_IMG_DIR_UNZIP_PATH] # 스마트폰 이미지만 사용
 
-    # unzip_all_img_file(skip = True) # 이미지 파일을 모두 unzip (skip 파라미터를 True로 지정하여 이미 파일이 존재하면 건너뜀)
+    unzip_all_img_file(skip = True) # 이미지 파일을 모두 unzip (skip 파라미터를 True로 지정하여 이미 파일이 존재하면 건너뜀)
 
-    load_img_option = option = {"max_img_per_class" : pc.MAX_IMG_PER_CLASS, 
-                                              "resume" : pc.RESUME, "save" : pc.SAVE}
+    load_img_option = {"max_img_per_class" : pc.MAX_IMG_PER_CLASS, "resume" : pc.RESUME, "save" : pc.SAVE}
 
     if pc.CENTER_CROP : # CENTER_CROP 파리미터가 True인 경우
         load_img_option["center_crop"] = {"crop_width" : pc.IMG_CROP_WIDTH, "crop_height" : pc.IMG_CROP_HEIGHT} # crop 관련 파라미터 추가
+    elif pc.EXTRACT_PATCH : # EXTRACT_PATCH 파라미터가 True인 경우 patch 추출 파라미터 추가
+        load_img_option["patch_option"] =  {'dim': pc.PATCH_DIM,
+        'offset': pc.PATCH_OFFSET,
+        'stride': pc.PATCH_STRIDE,
+        'rand': pc.PATCH_RAND,
+        'function': pc.PATCH_HANDLER,
+        'threshold': pc.PATCH_THRESHOLD,
+        'num': pc.N_MAX_PATCH,
+        'save_interval' : pc.PATCH_SAVE_INTERVAL
+        }
 
-    img_data, label = load_img_data(img_dir_path_list, img_data_pickle_path, 
-                                    option = load_img_option)  # 이미지 데이터와 레이블 불러옴
-    
-    from sklearn.preprocessing import OneHotEncoder # TODO
-    oneLabel = OneHotEncoder().fit_transform(np.array(label).reshape(-1, 1)).toarray()
-    #num_label = data_processing.label_to_number(label)  # string label을 숫자형으로 변환
+    img_data, label = load_img_data(img_dir_path_list, option = load_img_option)  # 이미지 데이터와 레이블 불러옴
+
+    oneLabel = data_processing.label_to_number(label, onehot = True)    # string label을 one hot vector로 변환
 
     cnn_model = CNN()
     cnn_model.train(img_data, oneLabel , tc.EPOCH, tc.BATCH_SIZE)
