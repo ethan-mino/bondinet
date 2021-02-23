@@ -4,12 +4,14 @@ from config import CommonConfig as cc
 from config import TrainConfig as tc
 from config import PreprocessingConfig as pc
 
+import traceback
 from functools import partial
 import os
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
 from PIL import Image
+import cv2
 
 # TODO : 함수 주석 달기 및 모듈화
 # TODO : HEIC 이미지 파일 변환 -> HEIC 이미지는 사용하지 않음.
@@ -66,14 +68,23 @@ def load_img_data(img_dir_path_list, option) : # 이미지가 저정된 디렉�
     error_file_name_list = []   # array로 변환하는데 실패한 이미지 파일명 목록
     X, y = [], []
 
-    pickle_dir_path = os.path.join(cc.PROJECT_PATH, f"{crop_width}_{crop_height}_{max_img_per_class}") # pickle 파일이 위치한 디렉토리의 path ("center crop 너비_높이_모델당 이미지 개수")
-    pickle_file_path = os.path.join(pickle_dir_path, f"{cc.IMG_DATA_PICKLE_NAME}{cc.PICKLE_EXT}")  # pickle 파일 path 
+    pickle_dir_path = cc.PROJECT_PATH
+    common_pickle_file_name = f"{cc.IMG_DATA_PICKLE_NAME}_{crop_width}_{crop_height}_{max_img_per_class}"
+
+    if "patch_option" in option :
+        patch_option = option["patch_option"]
+
+        patch_pickle_file_name = f"{patch_option['dim']}_{patch_option['offset']}_{patch_option['stride']}_{patch_option['rand']}_{patch_option['threshold']}_{patch_option['num']}"
+        pickle_file_path = os.path.join(cc.PROJECT_PATH, f"{common_pickle_file_name }_{patch_pickle_file_name}{cc.PICKLE_EXT}")  # pickle 파일 path 
+    else : 
+        pickle_file_path = os.path.join(cc.PROJECT_PATH, f"{common_pickle_file_name}{cc.PICKLE_EXT}")  # pickle 파일 path 
 
     total_model_dir_path_list = [os.path.join(img_dir_path, img_path) for img_dir_path in img_dir_path_list for img_path in os.listdir(img_dir_path)]   # img_dir_path_list의 각각의 img_dir_path에 있는 파일 및 디렉토리의 path 목록(즉, 카메라 모델 디렉토리의 path 목록)
 
     if resume == True : # resume 파라미터가 True인 경우, pickle 파일에서 데이터를 불러와 작업을 재개
         data = data_processing.load_data(pickle_file_path)  # pickle 파일에서 데이터를 불러옴
-        if data != None :   # pickle_file_path에 파일이 존재하는 경우
+        print(pickle_file_path)
+        if data is not None :   # pickle_file_path에 파일이 존재하는 경우
             X = data["X"]   # array로 변환된 이미지 데이터
             y = data["y"]   # label
             cur_model_index = data["save_model_index"]  + 1 # 현재 처리중인 모델의 index 
@@ -90,25 +101,56 @@ def load_img_data(img_dir_path_list, option) : # 이미지가 저정된 디렉�
             cur_model_dir_path = total_model_dir_path_list[cur_model_index] # 현재 처리중인 모델 디렉토리의 경로
             all_files_path = data_processing.get_all_files(cur_model_dir_path)  # 카메라 모델 디렉토리 하위의 모든 파일 path
             model_name = os.path.basename(cur_model_dir_path)   # 현재 처리중인 모델의 이름
+
+            n_files = len(all_files_path)
+            tqdm_total = n_files if max_img_per_class is None else min(max_img_per_class, n_files)  # max_img_per_class이면 tqdm의 total은 해당 모델의 총 파일 수, 그렇지 않으면 total은 max_img_per_class와 총 파일 개수 중 작은 것
+
+            with tqdm(total = tqdm_total, desc = "Load Img File") as file_bar : 
+                for file_path in all_files_path : # 현재 모델 디렉토리 하위의 모든 파일에 대해 반복
+                    try :
+                        # TODO : PIL to cv2
+                        img = Image.open(file_path)
+                        array_img = np.asarray(img)
+
+                        """
+                        fromfile = np.fromfile(file_path, np.uint8) # https://bskyvision.com/1078
+                        array_img = cv2.imdecode(fromfile, cv2.IMREAD_COLOR) # Image 모듈을 이용하여 이미지 파일을 불러옴 (image를 많이 불러오면 too many open files 에러가 발생하므로 with 구문을 사용)
+                        """
+
+                        if center_crop :   # crop 파라미터가 True인 경우
+                            img = data_processing.center_crop(img, crop_height, crop_width)    # TODO : 이미지를 center_crop (일단 이미지 cropping, 후에 네트워크가 완성되면 (saturated pixel/ image dynamic 또는 quality function에 따른) patch priority 적용하는 걸로 변경)
+                    
+                        if array_img is None :  # cv2.imread()의 결과가 None인 경우
+                            raise Exception
+
+                        if "patch_option" in option :
+                            patch_option["img"] = array_img
+                            patches = patch_extractor_one_arg(patch_option)
+                            n_patch = len(patches) # 추출된 patch의 개수
+                        
+                            X += patches
+                            y += [model_name for i in range(n_patch)]
+                        else : 
+                            X.append(array_img) 
+                            y.append(model_name)
+                        
+                        if max_img_per_class is not None and max_img_per_class < n_files :
+                            file_bar.update()
+
+                        processed_model_img_cnt += 1    # 처리된 현재 카메라 모델의 이미지 개수 증가
+
+                    except Exception as err:
+                        print(file_path)    # Invalid SOS parameters for sequential JPEG, Premature end of JPEG file 문제 해결
+                        traceback.print_exc()  # 에러 내용 출력
+                        error_file_name_list.append(os.path.basename(file_path))   # 이미지를 불러올 때 error가 발생한 경우 해당 파일명 저장
+
+                    if max_img_per_class is None or max_img_per_class >= n_files : # max_img_per_class가 해당 모델의 파일 수보다 크거나 같은 경우
+                        file_bar.update()
+
+                    if max_img_per_class != None and processed_model_img_cnt >= max_img_per_class :   # 각 모델에 대해 max_img_per_class개의 이미지만 array로 변환
+                        break;
         
-            for file_path in all_files_path : # 현재 모델 디렉토리 하위의 모든 파일에 대해 반복
-                try :
-                    img = Image.open(file_path) # Image 모듈을 이용하여 이미지 파일을 불러옴 (image를 많이 불러오면 too many open files 에러가 발생하므로 with 구문을 사용)
-
-                    if center_crop :   # crop 파라미터가 True인 경우
-                        img = data_processing.center_crop(img, crop_height, crop_width)    # TODO : 이미지를 center_crop (일단 이미지 cropping, 후에 네트워크가 완성되면 (saturated pixel/ image dynamic 또는 quality function에 따른) patch priority 적용하는 걸로 변경)
-
-                    X.append(np.asarray(img)) # 이미지를 numpy array로 변환
-                    y.append(model_name)
-                    processed_model_img_cnt += 1    # 처리된 현재 카메라 모델의 이미지 개수 증가
-                except Exception as err: 
-                    print(err)  # 에러 내용 출력
-                    error_file_name_list.append(os.path.basename(file_path))   # 이미지를 불러올 때 error가 발생한 경우 해당 파일명 저장
-
-                if max_img_per_class != None and processed_model_img_cnt >= max_img_per_class :   # 각 모델에 대해 max_img_per_class개의 이미지만 array로 변환
-                    break;
-        
-            if save == True and cur_model_index % 10 == 0: # save 파라미터가 True(default)인 경우 pickle 파일에 저장
+            if save == True: # save 파라미터가 True(default)인 경우 pickle 파일에 저장
                 data_processing.save_data({"X" : X, "y" : y, "save_model_index" : cur_model_index, "error_file_name_list" : error_file_name_list}, pickle_file_path)    # array로 변환된 이미지 데이터, 레이블, 저장 완료된 카메라 모델의 index를 pickle 파일에 저장
             
             cur_model_index += 1    # 현재 처리중인 모델의 index 증가
@@ -117,45 +159,7 @@ def load_img_data(img_dir_path_list, option) : # 이미지가 저정된 디렉�
     print("load error_cnt : " + str(len(error_file_name_list)))  # image를 불러와 center crop하고, array로 변환할 때 에러가 발생한 파일의 개수 출력
     print(error_file_name_list) # 에러가 발생한 파일명 출력
 
-    if "patch_option" in option :   # patch_option 파라미터가 있는 경우 각 이미지에서 patch를 추출
-        patch_option = option["patch_option"]
-        patch_save_interval = patch_option.pop("save_interval") # patch를 파일에 저장하는 간격(이미지 기준)
-        patch_file_path = os.path.join(pickle_dir_path, f"{cc.PATCH_PICKLE_NAME}_{patch_option.dim}_{patch_option.offset}_{patch_option.stride}_{patch_option.rand}_{patch_option.threshold}_{patch_option.num}{cc.PATCH_EXT}") # patch를 저장하는 pickle 파일의 경로
-        
-        cur_img_index = 0 # 현재 patch를 추출중인 이미지의 index
-        extract_error_cnt = 0   # patch 추출 실패 횟수
-
-        total_patch, patch_label = [], []
-        n_img = len(X) # patch를 추출할 이미지 개수 
-
-        if resume : 
-            patch_data = data_processing.load_data(patch_file_path)  # pickle 파일에서 patch 데이터를 불러옴
-            if patch_data != None :   # patch_file_path에 파일이 존재하는 경우
-                cur_img_index = data["save_img_index"] + 1
-                extract_error_cnt = data["extract_error_cnt"]
-                total_patch =  data["total_patch"]
-                patch_label = data["patch_label"]
-
-        with tqdm(total = n_img, initial = cur_img_index, desc = "Extract patch") as patch_bar : 
-            while cur_img_index < n_img :
-                img = X[cur_img_index]  # patch를 추출할 이미지
-                img_label = y[cur_img_index]    # 이미지의 label
-
-                patch_option["img"] = img
-                patches = patch_extractor_one_arg(patch_option) # 각 이미지의 patch를 추출
-                total_patch.append(patches)  
-                
-                n_patch = len(patches) # 추출된 patch의 개수
-                patch_label.full((1, n_patch), img_label)   # 원본 이미지의 label을 상속
-
-                if save == True and cur_img_index % patch_save_interval == 0:   # save 파라미터가 True인 경우 이미지 patch_save_interval 간격으로 patch를 저장
-                    data_processing.save_data({"total_patch" : total_patch, "patch_label" : patch_label, "extract_error_cnt" : extract_error_cnt, "save_img_index" : cur_img_index}, patch_file_path)    
-                
-                cur_img_index += 1
-                patch_bar.update()
-
-    else : 
-        return X, y # array로 변환된 이미지 데이터와 레이블 반환
+    return X, y # array로 변환된 이미지 데이터와 레이블 반환
 
 
 
@@ -259,7 +263,7 @@ class CNN : # https://minimin2.tistory.com/36
 
     def extract_feature_vectors(self, X_data) : # relu layer에서 forward propagation을 stop하여 feature 벡터 추출
         return self.session.run(self.ip1, feed_dict = {self.X : X_data})
-
+         
     def predict(self, X_data) :
         return self.session.run(self.predicted, feed_dict = {self.X : X_data})
 
@@ -280,7 +284,6 @@ if __name__ == "__main__" :
         'function': pc.PATCH_HANDLER,
         'threshold': pc.PATCH_THRESHOLD,
         'num': pc.N_MAX_PATCH,
-        'save_interval' : pc.PATCH_SAVE_INTERVAL
         }
 
     img_data, label = load_img_data(img_dir_path_list, option = load_img_option)  # 이미지 데이터와 레이블 불러옴
@@ -295,5 +298,6 @@ if __name__ == "__main__" :
     # print(np.array(num_label)[idx])
     
 
-    
+    # Develope Log
+    # unzip 한글 깨지는 문제 해결 (02-23)
 

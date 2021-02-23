@@ -8,7 +8,6 @@ First Steps Towards Camera Model Identification with Convolutional Neural Networ
 
 import random
 import numpy as np
-import cv2
 import types
 
 
@@ -49,7 +48,7 @@ def mid_intensity_high_texture(img):
     return score
 
 
-def patch_extractor(img, dim, **kwargs):
+def patch_extractor(img, **kwargs):
     """
     Patch extractor.
     Args:
@@ -66,6 +65,8 @@ def patch_extractor(img, dim, **kwargs):
     """
 
     # Arguments parser ---
+    dim = kwargs['dim']
+
     if not isinstance(img, np.ndarray):
         raise ValueError('img must be of type: ' + str(np.ndarray))
 
@@ -77,7 +78,7 @@ def patch_extractor(img, dim, **kwargs):
     if not isinstance(dim, tuple):
         raise ValueError('dim must be of type: [' + '|'.join([str(int), str(tuple)]) + ']')
 
-    if kwargs.has_key('offset'):
+    if 'offset' in kwargs :
         offset = kwargs.pop('offset')
         if isinstance(offset, int):
             offset = (offset, offset)
@@ -86,7 +87,7 @@ def patch_extractor(img, dim, **kwargs):
     else:
         offset = (0, 0)
 
-    if kwargs.has_key('stride'):
+    if 'stride' in kwargs :
         stride = kwargs.pop('stride')
         if isinstance(stride, int):
             stride = (stride, stride)
@@ -95,28 +96,28 @@ def patch_extractor(img, dim, **kwargs):
     else:
         stride = dim
 
-    if kwargs.has_key('rand'):
+    if 'rand' in kwargs :
         rand = kwargs.pop('rand')
         if not isinstance(rand, bool):
             raise ValueError('rand must be of type: ' + str(bool))
     else:
         rand = False
 
-    if kwargs.has_key('function'):
+    if 'function' in kwargs :
         function_handler = kwargs.pop('function')
         if not callable(function_handler):
             raise ValueError('function must be a function handler')
     else:
         function_handler = None
 
-    if kwargs.has_key('threshold'):
+    if 'threshold' in kwargs :
         threshold = kwargs.pop('threshold')
         if not isinstance(threshold, float):
             raise ValueError('threshold must be of type [' + '|'.join([str(np.float32), str(np.float64)]) + ']')
     else:
         threshold = 0
 
-    if kwargs.has_key('num'):
+    if 'num' in kwargs :
         num = kwargs.pop('num')
         if type(num) != int:
             raise ValueError('num must be of type: ' + str(int))
@@ -125,10 +126,12 @@ def patch_extractor(img, dim, **kwargs):
 
     if rand and function_handler is not None:
         raise ValueError('rand and function cannot be both set at the same time')
-
+    
+    """ TODO : 
     if len(kwargs.keys()):
         for key in kwargs:
             raise('Unrecognized parameter: {:}'.format(key))
+    """
 
     if function_handler is None:
         function_handler = one
@@ -156,7 +159,7 @@ def patch_extractor(img, dim, **kwargs):
     if rand:
         random.shuffle(patch_list)
     else:
-        patch_scores = np.asarray(map(function_handler, patch_list))
+        patch_scores = np.asarray(list(map(function_handler, patch_list)))
         patch_array = np.asarray(patch_list)
         sort_idxs = np.argsort(patch_scores)[::-1]
         patch_scores = patch_scores[sort_idxs]
@@ -184,10 +187,8 @@ def patch_extractor_one_arg(args):
     :param num (int): maximum number of patches
     :return list: list of numpy.ndarray of the same type as the input img
     """
-
+    
     img = args.pop('img')
-    dim = args.pop('dim')
 
     return patch_extractor(img,
-                           dim,
                            **args)

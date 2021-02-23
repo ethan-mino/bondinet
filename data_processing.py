@@ -4,20 +4,38 @@ import shutil
 import joblib
 from sklearn.preprocessing import OneHotEncoder 
 from sklearn.preprocessing import LabelEncoder
+import numpy as np
+from tqdm import tqdm 
+import traceback
+
+def unzip(source_file, dest_path):  # https://gldmg.tistory.com/141
+    with zipfile.ZipFile(source_file, 'r') as zf:
+        zipInfo = zf.infolist()
+        error_members = []
+
+        for member in zipInfo:
+            try:
+                #print(member.filename.encode('cp437').decode('euc-kr', 'ignore'))
+                member.filename = member.filename.encode('cp437').decode('euc-kr', 'ignore')
+                zf.extract(member, dest_path)
+            except Exception as err:
+                print(err)
+                error_members.append(source_file)
+
+    return error_members    # 에러가 발생한 file path 목록 리턴
 
 def unzip_all(source_dir_path_list, dest_dir_path, skip = False) :    # source_dir_path_list 안에 있는 각각의 디렉토리 내 zip 파일을 압축 해제하여 dest_dir_path에 저장
                                                         # source_dir_path_list : zip 파일을 저장하고 있는 디렉토리
                                                         # dest_dir_path : 압축 해제 결과를 저장할 디렉토리의 경로
-
-    for source_rdir_path in source_dir_path_list :   # zip 파일을 저장하고 있는 각각의 source 디렉토리에 대해 반복
+    total_error_members = []
+    
+    for source_rdir_path in tqdm(source_dir_path_list, desc = "Unzip dir"):   # zip 파일을 저장하고 있는 각각의 source 디렉토리에 대해 반복
         source_dir_name = os.path.basename(source_rdir_path) # zip 파일을 저장하고 있는 디렉토리명
         file_name_list = os.listdir(source_rdir_path) # 해당 디렉토리 안의 파일명 리스트
         
         zip_file_name_list = [file_name for file_name in file_name_list if zipfile.is_zipfile(os.path.join(source_rdir_path, file_name))]   # 파일 중 zip 파일만 filter
-
-        for zip_file_name in zip_file_name_list :    # 각 zip 파일을 압축 해제 
-            print(zip_file_name)    # zip 파일명 출력
-
+        
+        for zip_file_name in tqdm(zip_file_name_list, desc = "Unzip file") :    # 각 zip 파일을 압축 해제 
             zip_file_path = os.path.join(source_rdir_path, zip_file_name)    # 압축 해제 할 zip 파일의 경로
             zip_file_basename, ext = os.path.splitext(zip_file_name) # zip 파일명에서 basename과 확장자를 분리
             
@@ -26,8 +44,9 @@ def unzip_all(source_dir_path_list, dest_dir_path, skip = False) :    # source_d
             if os.path.exists(extract_dest_dir_path) and skip == True : # 이미 압축 해제된 디렉토리가 있고, skip 파라미터가 true인 경우 해당 zip파일을 압축 해제하지 않음.
                 continue
 
-            with zipfile.ZipFile(zip_file_path) as zip :    # zip 파일 압축 해제
-                zip.extractall(path = extract_dest_dir_path)
+            total_error_members += unzip(zip_file_path, extract_dest_dir_path) # zip 파일 압축 해제
+    
+    print("unzip error: ", total_error_members)
     print("Data unzip complete!\n")
 
 def center_crop(img, result_height, result_width) : # 이미지를 result_height * result_width 크기로 center_crop
@@ -57,6 +76,7 @@ def load_data(pickle_file_path) : # pickle file로부터 data load
         print("data loaded!")
         return data 
     except :    # pickle 파일에서 데이터를 load하는데 실패한 경우
+        traceback.print_exc()
         print("\nfail to load data from pickle file\n")
         return None
 

@@ -31,15 +31,15 @@ class PreprocessingConfig :
     IMG_CROP_HEIGHT = None
 
     # patch config
-    EXTRACT_PATCH = False
+    EXTRACT_PATCH = True
     PATCH_DIM = (64, 64)  # the dimensions of the patches (rows,cols).
     PATCH_OFFSET = 0  # the offsets of each axis starting from top left corner (rows,cols).
-    PATCH_STRIDE = 1  # the stride of each axis starting from top left corner (rows,cols).
+    PATCH_STRIDE = 64  # the stride of each axis starting from top left corner (rows,cols).
     PATCH_RAND = False    # rand patches. Must not be set together with function
     PATCH_HANDLER = patch_extractor.mid_intensity_high_texture   # patch quality function handler. Must not be set together with rand
-    PATCH_THRESHOLD = 0   # minimum quality threshold
+    PATCH_THRESHOLD = .0   # minimum quality threshold
     N_MAX_PATCH = 32    # maximum number of patches
-    PATCH_SAVE_INTERVAL = 500 # patch를 파일에 저장하는 간격(이미지 기준)
+    
 
 class TrainConfig : 
     CLASS_NUM = 29  # Galaxy Note9가 있기 때문에 Galaxy Note9 SM-N960N 디렉터리는 제거하고, Galaxy A8와 Galaxy A8(2018)은 서로 다른 클래스로 취급
