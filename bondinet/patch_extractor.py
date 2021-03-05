@@ -119,7 +119,7 @@ def patch_extractor(img, **kwargs):
 
     if 'num' in kwargs :
         num = kwargs.pop('num')
-        if type(num) != int:
+        if num is not None and type(num) != int:
             raise ValueError('num must be of type: ' + str(int))
     else:
         num = None
@@ -190,5 +190,4 @@ def patch_extractor_one_arg(args):
     
     img = args.pop('img')
 
-    return patch_extractor(img,
-                           **args)
+    return patch_extractor(img, **args)
