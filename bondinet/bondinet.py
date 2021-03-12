@@ -1,4 +1,4 @@
-import data_processing
+from data_processing import create_dir
 
 from functools import partial
 import os
@@ -6,29 +6,24 @@ from tqdm import tqdm
 import math
 import numpy as np
 import tensorflow as tf
-import sklearn
 import itertools
+import re
 
 class Bondinet : # https://minimin2.tistory.com/36
+    MODEL_FILE_NOT_EXIST_MSG = "Model File is not exists"
+    TOO_BIG_BATCH_SIZE = "of example is smaller than batch size!"
+
     def __init__(self, 
                  n_classes, 
-                 base_lr, 
-                 weight_decay, 
-                 momentum, 
-                 lr_decay_interval, 
-                 lr_decay_rate) : 
+                 weight_decay) : 
         
-        self.session = tf.Session(config=tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))) #  https://newsight.tistory.com/255 
+        self.sess = tf.Session(config=tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))) #  https://newsight.tistory.com/255 
         
         self.N_CLASSES = n_classes
-        self.BASE_LR = base_lr
         self.WEIGHT_DECAY = weight_decay
-        self.MOMENTUM = momentum
-        self.LR_DECAY_INTERVAL = lr_decay_interval
-        self.LR_DECAY_RATE = lr_decay_rate
         self.IP2_UNITS = n_classes
 
-    def build_net(self, decay_steps) :
+    def build_net(self, optimizer) :
         # conv common parameter
         CONV_PADDING = "same"
         CONV_ACTIVATION = None
@@ -65,11 +60,9 @@ class Bondinet : # https://minimin2.tistory.com/36
         # ip2 layer parameter
         IP2_ACTIVATION_FUNC = None
 
-        # LEARNING_SCHEDULE_NAME = "learning_schedule"
-        
         def weight_summary(weight) : # weight의 summary 생성 (http://solarisailab.com/archives/710)
             weight_name = weight.name.split(":")[0]
-            with tf.name_scope(f"{weight_name}") :
+            with tf.name_scope(weight_name) :
                 with tf.name_scope("mean") :
                     mean = tf.reduce_mean(weight)
                     tf.summary.scalar("mean", mean)
@@ -80,6 +73,8 @@ class Bondinet : # https://minimin2.tistory.com/36
 
                 tf.summary.scalar("max", tf.reduce_max(weight))
                 tf.summary.scalar("min", tf.reduce_min(weight))
+
+            with tf.name_scope("Variables/" + weight_name)  : 
                 tf.summary.histogram("histogram", weight)
 
         with tf.name_scope('input'):
@@ -110,107 +105,151 @@ class Bondinet : # https://minimin2.tistory.com/36
         
         regularization_losses = tf.losses.get_regularization_losses()
         self.reg_loss = tf.add_n([self.base_loss] + regularization_losses)    # l2 regulariztion loss (https://stackoverflow.com/questions/37107223/how-to-add-regularizations-in-tensorflow, http://blog.naver.com/PostView.nhn?blogId=infoefficien&logNo=221143520556)
-        tf.summary.scalar("loss", self.reg_loss)
+        self.loss_summary = tf.summary.scalar("loss", self.reg_loss)
         
-        global_step = global_step = tf.Variable(0, trainable=False)
-        # learning_schedule = tf.train.exponential_decay(learning_rate = self.BASE_LR, global_step = global_step, decay_steps = decay_steps, decay_rate = self.LR_DECAY_RATE, staircase = True, name = self.LEARNING_SCHEDULE_NAME)
-
-        self.optimizer = tf.train.AdamOptimizer(learning_rate= self.BASE_LR, beta1 = self.MOMENTUM)  # TODO : leaning_schedule 지정, weight_decay 적용할 수 있도록 optimizer 변경, sgd로 변경
-        gradients = self.optimizer.compute_gradients(loss = self.reg_loss)
+        gradients = optimizer.compute_gradients(loss = self.reg_loss)
 
         l2_norm = lambda t: tf.sqrt(tf.reduce_sum(tf.pow(t, 2)))    
         for gradient, variable in gradients:    # https://matpalm.com/blog/viz_gradient_norms/
-          tf.summary.histogram("gradients/" + variable.name, gradient) # 각 weight에 대한 gradient의 summary 생성
+          tf.summary.histogram("Gradients/" + variable.name, gradient) # 각 weight에 대한 gradient의 summary 생성
           weight_summary(variable) # 각 가중치의 summary 생성
 
-        self.training_op = self.optimizer.apply_gradients(gradients)
+        self.training_op = optimizer.apply_gradients(gradients)
 
         self.predicted = tf.argmax(self.logits, 1)    # what is parameter 1? - axis
         self.y_true = tf.argmax(self.y, 1)
         is_correct = tf.equal(self.predicted, self.y_true)
         self.accuracy = tf.reduce_mean(tf.cast(is_correct, tf.float32)) # accuracy 계산 (tf.cast : Casts a tensor to a new type. (The type of is_correct is int64))
 
-        tf.summary.scalar("accuracy", self.accuracy)
+        self.accuracy_summary = tf.summary.scalar("accuracy", self.accuracy)
+        self.loss_accuracy_summary = tf.summary.merge([self.loss_summary, self.accuracy_summary])
         self.merged = tf.summary.merge_all()
 
     def train(self, 
-              X_data, 
-              y_data, 
+              X_train, 
+              y_train, 
+              X_val,
+              y_val,
               n_epoch, 
               batch_size, 
+              optimizer,
+              momentum,
+              base_lr,
+              lr_scheduler,
+              lr_decay_interval,
+              lr_decay_rate,
               model_dir_path,  # 모델을 저장할 디렉토리의 경로
               batch_random_seed = 42, 
               model_save_interval = 10,
-              log_write_interval = 10) :
-
+              log_write_interval = 10, resume = False) :
+        
         LOG_DIR_NAME = "logs"
-        MODEL_FILE_NAME = "model"
+        MODEL_FILE_NAME = "model.ckpt"
 
         np.random.seed(batch_random_seed)    # randint SEED 지정
 
-        n_examples = len(X_data)  # 이미지의 개수
-        n_iteration = int(n_examples / batch_size) # iteration = 이미지 개수 / batch size
+        n_train_examples = len(X_train)  # Train 이미지의 개수
+        n_val_examples = len(X_val) # Validation 이미지 개수
+        n_iteration = int(n_train_examples / batch_size) # epoch당 iteration 개수 = 이미지 개수 / batch size
         
-        if n_examples < batch_size : # batch size 보다 샘플의 개수가 적은 경우
-            raise Exception("# of example is smaller than batch size!")
+        if n_train_examples < batch_size : # batch size 보다 샘플의 개수가 적은 경우
+            raise Exception(self.TOO_BIG_BATCH_SIZE)
 
-        decay_steps = self.LR_DECAY_INTERVAL * n_iteration
-        self.build_net(decay_steps)
-        
-        self.session.run(tf.global_variables_initializer()) # 변수 초기화
-        
-        """
-        if use_learning_rate_decay : 
-            learning_rate = self.session.graph.get_tensor_by_name(f"{self.learning_schedule_name}:0")
-            print(tf.train.exponential_decay(learning_rate  = self.base_lr, global_step = self.global_step, decay_steps = self.lr_decay_interval * n_iteration, decay_rate = self.lr_decay_rate, staircase = True))
-            tf.assign(learning_rate, tf.train.exponential_decay(learning_rate = self.base_lr, global_step = self.global_step, decay_steps = self.lr_decay_interval * n_iteration, decay_rate = self.lr_decay_rate, staircase = True))  # TODO : learning_rate를 base로 지정해줘도 괜찮을지 생각.        
-        """
+        if lr_scheduler : # lr_scheduler를 사용하는 경우
+            if optimizer == "Adam" : 
+                raise Exception("A learning scheduler is specified in the adam optimizer.") # 실험을 위해 optimizer가 SGD일 때만 learning_scheduler를 지정할 수 있도록 함.
+            global_step = tf.Variable(0, trainable=False)
+            decay_steps = lr_decay_interval * n_iteration  
+            learning_rate = tf.train.exponential_decay(learning_rate = base_lr, global_step = global_step, decay_steps = decay_steps, decay_rate = lr_decay_rate, staircase = True)
+        else : # lr_scheduler를 사용하지 않는 경우
+            if optimizer == "SGD":
+                raise Exception("A learning scheduler is not specified in the SGD optimizer.") # 실험을 위해 SGD일 때는 learning_scheduler를 지정하도록 함.
+            if lr_decay_interval is not None : 
+                raise Exception("If you don't specify a learning scheduler, lr_decay_interval is not required.")
+            if lr_decay_rate is not None : 
+                raise Exception("If you don't specify a learning scheduler, lr_decay_rate is not required.")
+            learning_rate = base_lr
+
+        if optimizer == "Adam" : 
+            optimizer = tf.train.AdamOptimizer(learning_rate= learning_rate, beta1 = momentum)  # TODO : leaning_schedule 지정, weight_decay 적용할 수 있도록 optimizer 변경, sgd로 변경
+        elif optimizer == "SGD":
+            optimizer = tf.train.MomentumOptimizer(learning_rate= learning_rate, momentum = momentum)  # TODO : leaning_schedule 지정, weight_decay 적용할 수 있도록 optimizer 변경, sgd로 변경
+        else : # Adam과 SGD를 제외한 optimizer인 경우
+            raise Exception("Unsupported optimizer".format(optimizer))
+
+        self.build_net(optimizer)   # 네트워크 build
 
         log_dir_path = os.path.join(model_dir_path, LOG_DIR_NAME)
+        train_log_dir_path = os.path.join(log_dir_path, "Train")    # Train 이벤트 파일 저장 디렉토리
+        val_log_dir_path = os.path.join(log_dir_path, "Val")    # Validation 이벤트 파일 저장 디렉토리
 
-        if not os.path.exists(log_dir_path): # log를 저장할 디렉터리가 없다면 생성
-            os.makedirs(log_dir_path)
-        if not os.path.exists(model_dir_path) : # model을 저장할 디렉터리가 없다면 생성
-            os.makedirs(model_dir_path)
+        create_dir([model_dir_path, log_dir_path, train_log_dir_path, val_log_dir_path])  # log와 model를 저장할 디렉터리가 없다면 생성
 
+        model_dir_list = sorted(list(map(int, [dir_name for dir_name in os.listdir(model_dir_path) if re.search("^[0-9]*$", dir_name)])), reverse = True) # 디렉토리명이 숫자인 디렉토리명만 추출한 후, int로 형변환 한 다음, 정렬
+        
         max_to_keep = int(math.ceil(n_epoch / model_save_interval)) # Checkpoint의 최대 개수 (interval에 따라 모든 모델을 저장)
-
         saver = tf.train.Saver(max_to_keep  = max_to_keep)    # 학습된 모델을 저장할 Savar 객체
-        file_writer = tf.summary.FileWriter(log_dir_path, self.session.graph)   # saver http://solarisailab.com/archives/710 참조 
 
-        for cur_epoch in tqdm(range(n_epoch), desc = "Epoch") :  
-            cur_model_dir_path = os.path.join(model_dir_path, str(cur_epoch))
-            cur_model_file_path = os.path.join(cur_model_dir_path, MODEL_FILE_NAME)
+        if resume :
+            if model_dir_list : # 모델 디렉토리가 있는 경우
+                saved_epoch = model_dir_list[0] # 가장 마지막에 저장된 epoch
+                start_epoch = saved_epoch + 1 # 이전에 저장된 가장 마지막 epoch 다음부터 학습 재개
+                resume_model_file_path = os.path.join(model_dir_path, str(saved_epoch), MODEL_FILE_NAME)    # 가장 마지막 epoch를 저장한 model 파일
+
+                saver.restore(self.sess, save_path = resume_model_file_path)    # 학습 재개를 위해 variable 복원
+            else :  # 모델 디렉토리가 없는 경우
+                raise Exception(self.MODEL_FILE_NOT_EXIST_MSG)   
+        else : 
+            self.sess.run(tf.global_variables_initializer())     # 변수 초기화
+            start_epoch = 0
+
+        
+        train_writer = tf.summary.FileWriter(train_log_dir_path, self.sess.graph)   # saver (http://solarisailab.com/archives/710 참조 )
+        val_writer = tf.summary.FileWriter(val_log_dir_path, self.sess.graph)   # val, train summary (https://gist.github.com/chang12/2d52af6a191a3aa4250cf44926dfd48a, https://stackoverflow.com/questions/37146614/tensorboard-plot-training-and-validation-losses-on-the-same-graph 참조)
+
+        cur_epoch = start_epoch
+        with tqdm(total = n_epoch, initial = cur_epoch, desc = "Epoch") as train_tqdm : 
+            while cur_epoch < n_epoch : 
+                cur_model_dir_path = os.path.join(model_dir_path, str(cur_epoch))   # 현재 epoch에 해당하는 모델을 저장할 디렉토리 path
+                cur_model_file_path = os.path.join(cur_model_dir_path, MODEL_FILE_NAME) # 현재 epoch에 해당하는 모델을 저장할 file path
             
-            if not os.path.exists(cur_model_dir_path) : # 현재 epoch에 해당하는 model을 저장할 디렉터리가 없다면 생성
-                os.makedirs(cur_model_dir_path)
+                for cur_iteration in tqdm(range(n_iteration), desc = "Iteration") :  
+                    steps = cur_epoch * n_iteration + cur_iteration
+                    train_shuffled_indices = np.random.randint(0, n_train_examples, batch_size) # 훈련 데이터에서 0 ~ (이미지 데이터 개수 -1) 사이의 수를 batch size만큼 random 추출
 
-            for cur_iteration in tqdm(range(n_iteration), desc = "Iteration") :  
-                steps = cur_epoch * n_iteration + cur_iteration
-                shuffled_indices = np.random.randint(0, n_examples, batch_size) # 0 ~ (이미지 데이터 개수 -1) 사이의 수를 batch size만큼 random 추출
-
-                # 모든 batch의 loss / 배치 개수로 loss 계산
-                X_batch = np.array(X_data)[shuffled_indices]  # random image data batch
-                y_batch = np.array(y_data)[shuffled_indices]  # random label batch
+                    # 모든 batch의 loss / 배치 개수로 loss 계산
+                    X_train_batch = np.array(X_train)[train_shuffled_indices]  # random image data batch
+                    y_train_batch = np.array(y_train)[train_shuffled_indices]  # random label batch
                 
-                feed_dict = feed_dict = {self.X : X_batch / 255, self.y : y_batch}
+                    train_feed_dict = train_feed_dict = {self.X : X_train_batch / 255, self.y : y_train_batch}
                 
-                if steps % log_write_interval == 0 : # log를 기록하는 iteration인 경우만 summary 계산
-                    summary, _ = self.session.run([self.merged, self.training_op], feed_dict = feed_dict)   
-                    file_writer.add_summary(summary , steps)
-                else : 
-                    self.session.run([self.training_op], feed_dict = feed_dict)   
+                    if steps % log_write_interval == 0 : # log를 기록하는 iteration인 경우만 summary 계산
+                        val_shuffled_indices = np.random.randint(0, n_val_examples, batch_size) # validation set에서 batch size만큼 random 추출
+                        X_val_batch = np.array(X_train)[val_shuffled_indices]  # validation X batch
+                        y_val_batch = np.array(y_train)[val_shuffled_indices]  # random label batch
 
-            if cur_epoch % model_save_interval == 0 :    # MODEL_SAVE_INTERVAL epoch마다 모델을 save
-                saver.save(self.session, cur_model_file_path)   # 모델 저장
-            
-        saver.save(self.session, cur_model_file_path) # 모델 저장
+                        train_summary, _ = self.sess.run([self.merged, self.training_op], feed_dict = train_feed_dict)   
+                        val_loss_accuracy_summary = self.sess.run(self.loss_accuracy_summary, feed_dict = {self.X : X_val_batch, self.y : y_val_batch})    # val accuracy, loss 계산
+
+                        train_writer.add_summary(train_summary , steps) # train summary 기록
+                        val_writer.add_summary(val_loss_accuracy_summary, steps)    # val accuracy, loss 기록
+                    else : 
+                        self.sess.run(self.training_op, feed_dict = train_feed_dict)   
+
+                if cur_epoch % model_save_interval == 0 or cur_epoch == n_epoch - 1:    # 마지막 epoch이거나, MODEL_SAVE_INTERVAL epoch마다 모델을 save
+                    if not os.path.exists(cur_model_dir_path) : # 현재 epoch에 해당하는 model을 저장할 디렉터리가 없다면 생성
+                        os.makedirs(cur_model_dir_path)
+
+                    saver.save(self.sess, cur_model_file_path)   # 모델 저장
+                
+                train_tqdm.update()
+                cur_epoch += 1
 
     def extract_feature_vectors(self, X_data) : # relu layer에서 forward propagation을 stop하여 feature 벡터 추출
-        return self.session.run(self.ip1, feed_dict = {self.X : X_data})
+        return self.sess.run(self.ip1, feed_dict = {self.X : X_data})
          
     def predict(self, X_data) :
-        return self.session.run(self.predicted, feed_dict = {self.X : X_data})
+        return self.sess.run(self.predicted, feed_dict = {self.X : X_data})
 
     def plot_confusion_matrix(cm, class_names):
         """
