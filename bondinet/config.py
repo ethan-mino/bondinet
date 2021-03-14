@@ -70,7 +70,7 @@ class TrainConfig :
     BASE_LR = 0.001 # Adam : 0.001, SGD : 0.01
     LR_SCHEDULER = False
     LR_DECAY_INTERVAL = None # Adam : None, SGD : 10
-    LR_DECAY_RATE = None  # Adam : None, SGD : 0.5
+    LR_DECAY_RATE = None # Adam : None, SGD : 0.5
 
     MODEL_SAVE_INTERVAL = 1   # Save Model per MODEL_SAVE_INTERVAL epoch 
     LOG_WRITE_INTERVAL = 10 # write log per LOG_WRITE_INTERVAL iteration 

@@ -123,6 +123,28 @@ def scene_split(single_device, seed) :
 
     unassigned = list(set(map(tuple, image_info_list)) - set(map(tuple, train_set)) - set(map(tuple, val_set)) - set(map(tuple, test_set)))   # train, validation, test set에 포함되지 않은 이미지
     
+
+    # 각 set의 모델당 이미지 개수 출력
+    sorted_by_scene = sorted(train_set, key = lambda x : x[MODEL_INDEX])  # 모델을 기준으로 정렬 (https://hulk89.github.io/python/2016/11/25/groupby/)
+    
+    print("train")
+    for key, items in groupby(sorted_by_scene, lambda x : x[MODEL_INDEX]) :    # 모델별 정보로 변환
+        print("model_name : ", key, "# : ", len([item for item in list(items)]))    # 모델당 이미지 개수 출력
+
+        # 각 set의 모델당 이미지 개수 출력
+    sorted_by_scene = sorted(val_set, key = lambda x : x[MODEL_INDEX])  # 모델을 기준으로 정렬 (https://hulk89.github.io/python/2016/11/25/groupby/)
+    
+    print("val")
+    for key, items in groupby(sorted_by_scene, lambda x : x[MODEL_INDEX]) :    # 모델별 정보로 변환
+        print("model_name : ", key, "# : ", len([item for item in list(items)]))    # 모델당 이미지 개수 출력
+
+    # 각 set의 모델당 이미지 개수 출력
+    sorted_by_scene = sorted(test_set, key = lambda x : x[MODEL_INDEX])  # 모델을 기준으로 정렬 (https://hulk89.github.io/python/2016/11/25/groupby/)
+    
+    print("test")
+    for key, items in groupby(sorted_by_scene, lambda x : x[MODEL_INDEX]) :    # 모델별 정보로 변환
+        print("model_name : ", key, "# : ", len([item for item in list(items)]))    # 모델당 이미지 개수 출력
+
     print("Unassigned : ", len(unassigned))
     print("Train shot : ", len(train_set))
     print("Val shot : ", len(val_set))

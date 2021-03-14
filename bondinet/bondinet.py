@@ -25,7 +25,7 @@ class Bondinet : # https://minimin2.tistory.com/36
 
     def build_net(self, optimizer) :
         # conv common parameter
-        CONV_PADDING = "same"
+        CONV_PADDING = "valid"
         CONV_ACTIVATION = None
         CONV_KERNEL_INITIALIZER = "glorot_uniform"
 
@@ -111,7 +111,7 @@ class Bondinet : # https://minimin2.tistory.com/36
 
         l2_norm = lambda t: tf.sqrt(tf.reduce_sum(tf.pow(t, 2)))    
         for gradient, variable in gradients:    # https://matpalm.com/blog/viz_gradient_norms/
-          tf.summary.histogram("Gradients/" + variable.name, gradient) # 각 weight에 대한 gradient의 summary 생성
+          tf.summary.histogram("Gradients/" + variable.name, l2_norm(gradient)) # 각 weight에 대한 gradient의 summary 생성
           weight_summary(variable) # 각 가중치의 summary 생성
 
         self.training_op = optimizer.apply_gradients(gradients)
@@ -221,18 +221,21 @@ class Bondinet : # https://minimin2.tistory.com/36
                     X_train_batch = np.array(X_train)[train_shuffled_indices]  # random image data batch
                     y_train_batch = np.array(y_train)[train_shuffled_indices]  # random label batch
                 
-                    train_feed_dict = train_feed_dict = {self.X : X_train_batch / 255, self.y : y_train_batch}
-                
+                    train_feed_dict = {self.X : X_train_batch / 255, self.y : y_train_batch}
+                    
                     if steps % log_write_interval == 0 : # log를 기록하는 iteration인 경우만 summary 계산
                         val_shuffled_indices = np.random.randint(0, n_val_examples, batch_size) # validation set에서 batch size만큼 random 추출
-                        X_val_batch = np.array(X_train)[val_shuffled_indices]  # validation X batch
-                        y_val_batch = np.array(y_train)[val_shuffled_indices]  # random label batch
+                        
+                        X_val_batch = np.array(X_val)[val_shuffled_indices]  # validation X batch
+                        y_val_batch = np.array(y_val)[val_shuffled_indices]  # random label batch
 
                         train_summary, _ = self.sess.run([self.merged, self.training_op], feed_dict = train_feed_dict)   
-                        val_loss_accuracy_summary = self.sess.run(self.loss_accuracy_summary, feed_dict = {self.X : X_val_batch, self.y : y_val_batch})    # val accuracy, loss 계산
+                        val_loss_accuracy_summary = self.sess.run(self.loss_accuracy_summary, feed_dict = {self.X : X_val_batch / 255, self.y : y_val_batch})    # val accuracy, loss 계산
 
                         train_writer.add_summary(train_summary , steps) # train summary 기록
                         val_writer.add_summary(val_loss_accuracy_summary, steps)    # val accuracy, loss 기록
+                        train_writer.flush()
+                        val_writer.flush()
                     else : 
                         self.sess.run(self.training_op, feed_dict = train_feed_dict)   
 
