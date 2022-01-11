@@ -27,6 +27,8 @@ from sklearn.model_selection import train_test_split
 # TODO : Galaxy Note9 SM-N960N는 제외한 후 실험 (Note 9과 합쳐서 실험 - 플래그쉽 모델은 성능이 달라지지 않아서 합쳐서 사용하고, A8은 보급형이라 년도마다 성능이 다름 요것도 한번 확인해봐야할 듯)
 # TODO : bondinet 코드 사용을 제한하고 있음, patch_extractor은 고려해봐야할 듯
 
+# TODO : constant initializer의 초기 값 확인
+# TODO : 이미지 스케일링 방식 변경
 # TODO : 네트워크가 이미지를 입력받으면 standardization이나, 논문처럼 scale을 변환하도록 수정
 # TODO : Galaxy S6_3552.jpg 이미지 깨진거 보고
 # TODO : sgd + momentum + learning rate scheduler 다시 실험해보기

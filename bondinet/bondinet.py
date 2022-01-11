@@ -27,10 +27,9 @@ class Bondinet : # https://minimin2.tistory.com/36
         # conv common parameter
         CONV_PADDING = "valid"
         CONV_ACTIVATION = None
-        CONV_KERNEL_INITIALIZER = "glorot_uniform"
-
-        CONV_BIAS_INITIALIZER = None
-        USE_CONV_BIAS = False
+        WEIGHT_INITIALIZER = "glorot_uniform"
+        BIAS_INITIALIZER = "constant"
+        USE_CONV_BIAS = True
 
         # l1 conv parameter
         L1_CONV_FILTERS = 32
@@ -82,9 +81,9 @@ class Bondinet : # https://minimin2.tistory.com/36
             self.y = tf.placeholder(tf.int32, [None, self.N_CLASSES])   # OneHot Vector
         
         l2_regularizer = tf.contrib.layers.l2_regularizer(self.WEIGHT_DECAY)
-        custom_conv2d = partial(tf.layers.conv2d, activation = CONV_ACTIVATION, kernel_initializer = CONV_KERNEL_INITIALIZER, bias_initializer = CONV_BIAS_INITIALIZER, use_bias = USE_CONV_BIAS, padding = CONV_PADDING, kernel_regularizer = l2_regularizer)
+        custom_conv2d = partial(tf.layers.conv2d, activation = CONV_ACTIVATION, kernel_initializer = WEIGHT_INITIALIZER, bias_initializer = BIAS_INITIALIZER, use_bias = USE_CONV_BIAS, padding = CONV_PADDING, kernel_regularizer = l2_regularizer)
         custom_max_pooling2d = partial(tf.layers.max_pooling2d, pool_size = MAX_POOLING_POOL_SIZE, strides = MAX_POOLING_STRIDES, padding = MAX_POLLING_PADDING)
-        custom_dense = partial(tf.layers.dense, kernel_regularizer = l2_regularizer)
+        custom_dense = partial(tf.layers.dense, kernel_initializer = WEIGHT_INITIALIZER, bias_initializer = BIAS_INITIALIZER, kernel_regularizer = l2_regularizer)
 
         l1_conv = custom_conv2d(inputs = self.X, filters = L1_CONV_FILTERS, kernel_size = L1_CONV_KERNEL_SIZE)
         l1_max_pool = custom_max_pooling2d(l1_conv)
@@ -218,19 +217,19 @@ class Bondinet : # https://minimin2.tistory.com/36
                     train_shuffled_indices = np.random.randint(0, n_train_examples, batch_size) # 훈련 데이터에서 0 ~ (이미지 데이터 개수 -1) 사이의 수를 batch size만큼 random 추출
 
                     # 모든 batch의 loss / 배치 개수로 loss 계산
-                    X_train_batch = np.array(X_train)[train_shuffled_indices]  # random image data batch
+                    X_train_batch = self.image_scaling(np.array(X_train)[train_shuffled_indices])  # random image data batch
                     y_train_batch = np.array(y_train)[train_shuffled_indices]  # random label batch
                 
-                    train_feed_dict = {self.X : X_train_batch / 255, self.y : y_train_batch}
+                    train_feed_dict = {self.X : X_train_batch, self.y : y_train_batch}
                     
                     if steps % log_write_interval == 0 : # log를 기록하는 iteration인 경우만 summary 계산
                         val_shuffled_indices = np.random.randint(0, n_val_examples, batch_size) # validation set에서 batch size만큼 random 추출
                         
-                        X_val_batch = np.array(X_val)[val_shuffled_indices]  # validation X batch
+                        X_val_batch = self.image_scaling(np.array(X_val)[val_shuffled_indices])  # validation X batch
                         y_val_batch = np.array(y_val)[val_shuffled_indices]  # random label batch
 
                         train_summary, _ = self.sess.run([self.merged, self.training_op], feed_dict = train_feed_dict)   
-                        val_loss_accuracy_summary = self.sess.run(self.loss_accuracy_summary, feed_dict = {self.X : X_val_batch / 255, self.y : y_val_batch})    # val accuracy, loss 계산
+                        val_loss_accuracy_summary = self.sess.run(self.loss_accuracy_summary, feed_dict = {self.X : X_val_batch, self.y : y_val_batch})    # val accuracy, loss 계산
 
                         train_writer.add_summary(train_summary , steps) # train summary 기록
                         val_writer.add_summary(val_loss_accuracy_summary, steps)    # val accuracy, loss 기록
@@ -253,6 +252,9 @@ class Bondinet : # https://minimin2.tistory.com/36
          
     def predict(self, X_data) :
         return self.sess.run(self.predicted, feed_dict = {self.X : X_data})
+
+    def image_scaling(self, batch) :
+        return (batch - 127) * 0.0125
 
     def plot_confusion_matrix(cm, class_names):
         """
